@@ -1,0 +1,29 @@
+[project]
+name = "aut-kg-extraction-pipeline"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "instructor>=1.15.1",
+    "numpy>=2.4.4",
+    "openai>=2.33.0",
+    "pydantic>=2.13.3",
+    "python-dotenv>=1.2.2",
+    "sentence-transformers>=5.4.1",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.2.0",
+    "jupyter>=1.1.1",
+    "pytest>=9.0.3",
+    "ruff>=0.15.12",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend"]
