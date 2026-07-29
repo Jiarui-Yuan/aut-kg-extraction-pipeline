@@ -114,3 +114,71 @@ class VideoSegment(Segment):
             if name_counts[original_name] > 1:
                 next_number[original_name] += 1
                 entity.name = f"{original_name}_{next_number[original_name]}"
+
+
+class Instruction:
+    """A collection of segments with observations indexed by segment ID.
+
+    Objects are taken directly from each segment. Actors are derived from the
+    actor references in its actions and de-duplicated while retaining their
+    first-observed order.
+    """
+
+    def __init__(
+        self,
+        id: str,
+        name: str,
+        segments: list[Segment],
+    ):
+        """Initialize an instruction and build its per-segment lookup maps."""
+
+        self.id = id
+        self.name = name
+        self.segments = segments
+        self.objects: dict[str, list[ObservedObject]] = {}
+        self.actors: dict[str, list[ObservedActor]] = {}
+        for segment in segments:
+            self._add_object_references(segment)
+            self.objects[segment.id] = segment.objects
+            self.actors[segment.id] = self._actors_from_segment(segment)
+
+    def extract_actors(self) -> list[ObservedActor]:
+        """Extract a de-duplicated list of actors across all segments."""
+
+        actors_by_name: dict[str, ObservedActor] = {}
+        for segment_actors in self.actors.values():
+            for actor in segment_actors:
+                existing = actors_by_name.get(actor.name)
+                if existing is None:
+                    actors_by_name[actor.name] = actor.model_copy(deep=True)
+                else:
+                    existing.merge(actor)
+        return list(actors_by_name.values())
+
+    @staticmethod
+    def _actors_from_segment(segment: Segment) -> list[ObservedActor]:
+        actors_by_name: dict[str, ObservedActor] = {}
+        for action in segment.actions:
+            actor = actors_by_name.setdefault(
+                action.actor,
+                ObservedActor(name=action.actor),
+            )
+            if action.id not in actor.action_ids:
+                actor.action_ids.append(action.id)
+        return list(actors_by_name.values())
+
+    @staticmethod
+    def _add_object_references(segment: Segment) -> None:
+        for observed_object in segment.objects:
+            referenced_ids = [
+                action.id
+                for action in segment.actions
+                if observed_object.name
+                in (action.object, action.instrument, action.target)
+            ]
+            observed_object.action_ids = list(
+                dict.fromkeys([
+                    *observed_object.action_ids,
+                    *referenced_ids,
+                ])
+            )
