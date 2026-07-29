@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from backend.schemas.process_knowledge.text import (
         Instruction,
         ObservedActor,
+        ObservedObject,
     )
 
 EntityT = TypeVar("EntityT")
@@ -293,3 +294,148 @@ class ActorResolver(Resolver["ObservedActor", "Instruction"]):
         """Actor-specific alias for the generic entity collection."""
 
         return self.entities
+
+
+class ObjectResolver(Resolver["ObservedObject", "Instruction"]):
+    """Resolve objects observed across an instruction's segments."""
+
+    def __init__(self, instruction: "Instruction | None" = None):
+        self._entity_bindings: list[
+            tuple["ObservedObject", ObjectEntity]
+        ] = []
+        super().__init__(instruction)
+
+    @property
+    def entity_kind(self) -> str:
+        return "object"
+
+    def entities_from_source(
+        self,
+        instruction: "Instruction",
+    ) -> list["ObservedObject"]:
+        return [
+            observed_object
+            for segment_objects in instruction.objects.values()
+            for observed_object in segment_objects
+        ]
+
+    def semantic_label(self, observed_object: "ObservedObject") -> str:
+        return (
+            f"name={observed_object.name!r}, "
+            f"type={observed_object.object_type!r}"
+        )
+
+    def create_entities(
+        self,
+        objects: list["ObservedObject"] | None = None,
+        *,
+        extractor: Extractor | None = None,
+    ) -> list[ObjectEntity]:
+        """Classify resolved objects as Tool, Material, or PPE entities."""
+
+        candidates = objects if objects is not None else self.objects
+        labels = [self.semantic_label(observed_object) for observed_object in candidates]
+        if len(labels) != len(set(labels)):
+            raise ValueError(
+                "Objects must be de-duplicated before creating entities"
+            )
+        if not candidates:
+            return []
+
+        entity_extractor = extractor or Extractor()
+        classified_objects = entity_extractor.extract_list(
+            text=json.dumps(labels, ensure_ascii=False),
+            item_model=ClassifiedObject,
+            system_prompt=self._object_entity_creation_prompt(),
+        )
+        entities = self._validate_classified_objects(
+            candidates,
+            labels,
+            classified_objects,
+        )
+        self._entity_bindings = list(
+            zip(candidates, entities, strict=True)
+        )
+        return entities
+
+    def _object_entity_creation_prompt(self) -> str:
+        return (
+            "Classify every object in the supplied JSON list as exactly one "
+            "of tool, material, or ppe, and create the corresponding Tool, "
+            "Material, or PPE value. Return exactly one ClassifiedObject per "
+            "input label and copy that label verbatim to input_label. Populate "
+            "only the field selected by entity_type and leave the other two "
+            "null. Copy the object's original name, without the name= syntax "
+            "or quotes, to the nested entity's name. Infer optional attributes "
+            "only when the supplied object name or type provides sufficient "
+            "evidence; otherwise leave them null. Do not invent manufacturers, "
+            "models, specifications, dimensions, or standards. "
+            f"{self.source_context()}"
+        )
+
+    @staticmethod
+    def _validate_classified_objects(
+        objects: list["ObservedObject"],
+        labels: list[str],
+        classified_objects: list[ClassifiedObject],
+    ) -> list[ObjectEntity]:
+        result_by_label: dict[str, ObjectEntity] = {}
+
+        for classified in classified_objects:
+            selected = {
+                "tool": classified.tool,
+                "material": classified.material,
+                "ppe": classified.ppe,
+            }
+            entity = selected[classified.entity_type]
+            populated_fields = [
+                value for value in selected.values() if value is not None
+            ]
+            if entity is None or len(populated_fields) != 1:
+                raise ValueError(
+                    "Each classified object must populate exactly the entity "
+                    "field selected by entity_type"
+                )
+            if classified.input_label in result_by_label:
+                raise ValueError(
+                    "Object entity extraction returned a duplicate input label"
+                )
+            result_by_label[classified.input_label] = entity
+
+        if set(result_by_label) != set(labels):
+            raise ValueError(
+                "Object entity extraction must return every object exactly "
+                "once without changing its input label"
+            )
+
+        entities: list[ObjectEntity] = []
+        for observed_object, label in zip(objects, labels, strict=True):
+            entity = result_by_label[label]
+            if entity.name != observed_object.name:
+                raise ValueError(
+                    "Object entity extraction must preserve object names"
+                )
+            entities.append(entity)
+        return entities
+
+    def add_instruction(
+        self,
+        instruction: "Instruction",
+    ) -> list["ObservedObject"]:
+        """Convenience alias for adding an instruction."""
+
+        return self.add_source(instruction)
+
+    @property
+    def objects(self) -> list["ObservedObject"]:
+        """Object-specific alias for the generic entity collection."""
+
+        return self.entities
+
+    @property
+    def entity_bindings(
+        self,
+    ) -> list[tuple["ObservedObject", ObjectEntity]]:
+        """Created entities paired with their reference-bearing observations."""
+
+        return self._entity_bindings
