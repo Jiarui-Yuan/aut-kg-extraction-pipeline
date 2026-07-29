@@ -1,11 +1,17 @@
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Generic, Literal, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias, TypeVar
 
 from pydantic import BaseModel
 
 from backend.extraction.extractor import Extractor
-from backend.schemas.process_knowledge.entities import Material, PPE, Tool
+from backend.schemas.process_knowledge.entities import Material, PPE, Tool, Worker
+
+if TYPE_CHECKING:
+    from backend.schemas.process_knowledge.text import (
+        Instruction,
+        ObservedActor,
+    )
 
 EntityT = TypeVar("EntityT")
 SourceT = TypeVar("SourceT")
@@ -200,3 +206,90 @@ class Resolver(ABC, Generic[EntityT, SourceT]):
     @property
     def entities(self) -> list[EntityT]:
         return self._entities
+
+
+class ActorResolver(Resolver["ObservedActor", "Instruction"]):
+    """Resolve actor references found in an instruction."""
+
+    @property
+    def entity_kind(self) -> str:
+        return "actor"
+
+    def entities_from_source(
+        self,
+        instruction: "Instruction",
+    ) -> list["ObservedActor"]:
+        return [
+            actor
+            for segment_actors in instruction.actors.values()
+            for actor in segment_actors
+        ]
+
+    def semantic_label(self, actor: "ObservedActor") -> str:
+        return actor.name
+
+    def create_workers(
+        self,
+        actors: list["ObservedActor"] | None = None,
+        *,
+        extractor: Extractor | None = None,
+    ) -> list[Worker]:
+        """Create and, where names allow it, enrich workers for actor names."""
+
+        candidates = actors if actors is not None else self.actors
+        actor_names = [actor.name for actor in candidates]
+        if len(actor_names) != len(set(actor_names)):
+            raise ValueError("Actors must be de-duplicated before creating workers")
+        if not actor_names:
+            return []
+
+        worker_extractor = extractor or Extractor()
+        workers = worker_extractor.extract_list(
+            text=json.dumps(actor_names, ensure_ascii=False),
+            item_model=Worker,
+            system_prompt=self._worker_creation_prompt(),
+        )
+        return self._validate_workers(actor_names, workers)
+
+    def _worker_creation_prompt(self) -> str:
+        return (
+            "Create exactly one Worker for every actor name in the supplied "
+            "JSON list. Copy each input actor name verbatim into Worker.name; "
+            "do not add, remove, translate, merge, or rename workers. Infer "
+            "optional attributes such as role only when the actor name itself "
+            "provides sufficient evidence. Otherwise leave optional fields "
+            "null. Do not invent expertise levels or certifications. "
+            f"{self.source_context()}"
+        )
+
+    @staticmethod
+    def _validate_workers(
+        actor_names: list[str],
+        workers: list[Worker],
+    ) -> list[Worker]:
+        worker_names = [worker.name for worker in workers]
+        if (
+            len(worker_names) != len(actor_names)
+            or set(worker_names) != set(actor_names)
+        ):
+            raise ValueError(
+                "Worker extraction must return every actor exactly once "
+                "without changing its name"
+            )
+
+        workers_by_name = {worker.name: worker for worker in workers}
+        return [workers_by_name[name] for name in actor_names]
+
+    def add_instruction(
+        self,
+        instruction: "Instruction",
+    ) -> list["ObservedActor"]:
+        """Backward-compatible alias for adding an instruction."""
+
+        return self.add_source(instruction)
+
+    @property
+    def actors(self) -> list["ObservedActor"]:
+        """Actor-specific alias for the generic entity collection."""
+
+        return self.entities
