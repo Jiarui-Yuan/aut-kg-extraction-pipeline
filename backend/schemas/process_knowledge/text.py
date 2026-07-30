@@ -96,9 +96,50 @@ class VideoSegment(Segment):
     def number_repeated_entities(self) -> "VideoSegment":
         """Number repeated object and actor names in their observation order."""
 
+        self._reject_ambiguous_action_references()
         self._number_repeated_names(self.objects)
         self._number_repeated_names(self.actors)
         return self
+
+    def _reject_ambiguous_action_references(self) -> None:
+        """Reject action labels that match more than one observed entity."""
+
+        repeated_object_names = {
+            name
+            for name, count in Counter(
+                observed_object.name for observed_object in self.objects
+            ).items()
+            if count > 1
+        }
+        object_references = {
+            reference
+            for action in self.actions
+            for reference in (action.object, action.instrument, action.target)
+            if reference is not None
+        }
+        ambiguous_objects = repeated_object_names & object_references
+        if ambiguous_objects:
+            names = ", ".join(sorted(repr(name) for name in ambiguous_objects))
+            raise ValueError(
+                "Action object references are ambiguous for repeated "
+                f"observation names: {names}. Assign unique names before "
+                "creating the VideoSegment."
+            )
+
+        repeated_actor_names = {
+            name
+            for name, count in Counter(actor.name for actor in self.actors).items()
+            if count > 1
+        }
+        actor_references = {action.actor for action in self.actions}
+        ambiguous_actors = repeated_actor_names & actor_references
+        if ambiguous_actors:
+            names = ", ".join(sorted(repr(name) for name in ambiguous_actors))
+            raise ValueError(
+                "Action actor references are ambiguous for repeated observation "
+                f"names: {names}. Assign unique names before creating the "
+                "VideoSegment."
+            )
 
     @staticmethod
     def _number_repeated_names(
