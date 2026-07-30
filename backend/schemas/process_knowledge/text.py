@@ -173,6 +173,7 @@ class Instruction:
     ):
         """Initialize an instruction and build its per-segment lookup maps."""
 
+        self._validate_reference_ids(segments)
         self.id = id
         self.name = name
         self.segments = segments
@@ -182,6 +183,32 @@ class Instruction:
             self._add_object_references(segment)
             self.objects[segment.id] = segment.objects
             self.actors[segment.id] = self._actors_from_segment(segment)
+
+    @staticmethod
+    def _validate_reference_ids(segments: list[Segment]) -> None:
+        """Ensure every ID used as an instruction-wide lookup key is unique."""
+
+        segment_counts = Counter(segment.id for segment in segments)
+        duplicate_segment_ids = sorted(
+            segment_id for segment_id, count in segment_counts.items() if count > 1
+        )
+        if duplicate_segment_ids:
+            raise ValueError(
+                "Instruction segment IDs must be unique; duplicates: "
+                f"{duplicate_segment_ids!r}"
+            )
+
+        action_counts = Counter(
+            action.id for segment in segments for action in segment.actions
+        )
+        duplicate_action_ids = sorted(
+            action_id for action_id, count in action_counts.items() if count > 1
+        )
+        if duplicate_action_ids:
+            raise ValueError(
+                "Instruction action IDs must be globally unique; duplicates: "
+                f"{duplicate_action_ids!r}"
+            )
 
     def extract_actors(self) -> list[ObservedActor]:
         """Extract a de-duplicated list of actors across all segments."""
