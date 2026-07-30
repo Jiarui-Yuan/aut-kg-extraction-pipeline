@@ -1,34 +1,43 @@
 """Schemas for observations extracted from text and video segments."""
 
 from collections import Counter
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Mapping, NewType
 
 from pydantic import BaseModel, Field, model_validator
+
+ActionId = NewType("ActionId", str)
+ActorId = NewType("ActorId", str)
+ObjectId = NewType("ObjectId", str)
+SegmentId = NewType("SegmentId", str)
 
 
 class ObservedAction(BaseModel):
     """An action observed during a bounded time interval.
 
-    Actor and entity references are stored as names matching the corresponding
-    observed actors and objects.
+    Actor and entity references use typed observation IDs. Display names are
+    never used as foreign keys.
     """
 
-    id: str
+    id: ActionId
     start_time_ms: int
     end_time_ms: int
 
-    actor: str
+    actor_id: ActorId
     action: str
-    object: str | None = None
-    instrument: str | None = None
-    target: str | None = None
+    object_id: ObjectId | None = None
+    instrument_id: ObjectId | None = None
+    target_id: ObjectId | None = None
 
 
 class ObservedObject(BaseModel):
     """An object observed in a segment."""
 
+    id: ObjectId
     name: str
     object_type: str
-    action_ids: list[str] = Field(default_factory=list)
+    action_ids: list[ActionId] = Field(default_factory=list)
 
     def matches(self, other: object) -> bool:
         """Match objects by their observed name and type."""
@@ -42,16 +51,15 @@ class ObservedObject(BaseModel):
     def merge(self, other: "ObservedObject") -> None:
         """Merge action references while preserving observation order."""
 
-        self.action_ids = list(
-            dict.fromkeys([*self.action_ids, *other.action_ids])
-        )
+        self.action_ids = list(dict.fromkeys([*self.action_ids, *other.action_ids]))
 
 
 class ObservedActor(BaseModel):
     """An actor observed in a video segment."""
 
+    id: ActorId
     name: str
-    action_ids: list[str] = Field(default_factory=list)
+    action_ids: list[ActionId] = Field(default_factory=list)
 
     def matches(self, other: object) -> bool:
         """Match actors by their observed name."""
@@ -61,17 +69,16 @@ class ObservedActor(BaseModel):
     def merge(self, other: "ObservedActor") -> None:
         """Merge action references while preserving observation order."""
 
-        self.action_ids = list(
-            dict.fromkeys([*self.action_ids, *other.action_ids])
-        )
+        self.action_ids = list(dict.fromkeys([*self.action_ids, *other.action_ids]))
 
 
 class Segment(BaseModel):
     """A text-derived segment containing observations to be processed."""
 
-    id: str
+    id: SegmentId
     scene: str
     actions: list[ObservedAction]
+    actors: list[ObservedActor]
     objects: list[ObservedObject]
     uncertainties: list[str]
 
@@ -96,50 +103,9 @@ class VideoSegment(Segment):
     def number_repeated_entities(self) -> "VideoSegment":
         """Number repeated object and actor names in their observation order."""
 
-        self._reject_ambiguous_action_references()
         self._number_repeated_names(self.objects)
         self._number_repeated_names(self.actors)
         return self
-
-    def _reject_ambiguous_action_references(self) -> None:
-        """Reject action labels that match more than one observed entity."""
-
-        repeated_object_names = {
-            name
-            for name, count in Counter(
-                observed_object.name for observed_object in self.objects
-            ).items()
-            if count > 1
-        }
-        object_references = {
-            reference
-            for action in self.actions
-            for reference in (action.object, action.instrument, action.target)
-            if reference is not None
-        }
-        ambiguous_objects = repeated_object_names & object_references
-        if ambiguous_objects:
-            names = ", ".join(sorted(repr(name) for name in ambiguous_objects))
-            raise ValueError(
-                "Action object references are ambiguous for repeated "
-                f"observation names: {names}. Assign unique names before "
-                "creating the VideoSegment."
-            )
-
-        repeated_actor_names = {
-            name
-            for name, count in Counter(actor.name for actor in self.actors).items()
-            if count > 1
-        }
-        actor_references = {action.actor for action in self.actions}
-        ambiguous_actors = repeated_actor_names & actor_references
-        if ambiguous_actors:
-            names = ", ".join(sorted(repr(name) for name in ambiguous_actors))
-            raise ValueError(
-                "Action actor references are ambiguous for repeated observation "
-                f"names: {names}. Assign unique names before creating the "
-                "VideoSegment."
-            )
 
     @staticmethod
     def _number_repeated_names(
