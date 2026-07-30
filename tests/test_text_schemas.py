@@ -155,3 +155,46 @@ def test_instruction_adds_action_references_to_actors_and_objects() -> None:
             action_ids=["action-1", "action-2"],
         ),
     ]
+
+
+def test_instruction_rejects_duplicate_segment_ids() -> None:
+    segment = Segment(
+        id="segment-1",
+        scene="workbench",
+        actions=[],
+        objects=[],
+        uncertainties=[],
+    )
+
+    with pytest.raises(ValueError, match="segment IDs must be unique"):
+        Instruction(
+            id="instruction-1",
+            name="Duplicate segments",
+            segments=[segment, segment.model_copy(deep=True)],
+        )
+
+
+def test_instruction_rejects_duplicate_action_ids_across_segments() -> None:
+    def segment(segment_id: str) -> Segment:
+        return Segment(
+            id=segment_id,
+            scene="workbench",
+            actions=[
+                ObservedAction(
+                    id="action-1",
+                    start_time_ms=0,
+                    end_time_ms=1000,
+                    actor="worker",
+                    action="inspect",
+                ),
+            ],
+            objects=[],
+            uncertainties=[],
+        )
+
+    with pytest.raises(ValueError, match="action IDs must be globally unique"):
+        Instruction(
+            id="instruction-1",
+            name="Duplicate actions",
+            segments=[segment("segment-1"), segment("segment-2")],
+        )
