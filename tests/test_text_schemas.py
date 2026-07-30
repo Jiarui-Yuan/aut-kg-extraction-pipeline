@@ -1,3 +1,5 @@
+import pytest
+
 from backend.schemas.process_knowledge.text import (
     Instruction,
     ObservedAction,
@@ -49,6 +51,57 @@ def test_video_segment_numbers_repeated_actors() -> None:
     )
 
     assert [actor.name for actor in segment.actors] == ["worker_1", "worker_2"]
+
+
+def test_video_segment_rejects_ambiguous_repeated_object_reference() -> None:
+    with pytest.raises(ValueError, match="object references are ambiguous"):
+        VideoSegment(
+            id="segment-1",
+            start_time_ms=0,
+            end_time_ms=1000,
+            scene="workbench",
+            actions=[
+                ObservedAction(
+                    id="action-1",
+                    start_time_ms=0,
+                    end_time_ms=1000,
+                    actor="worker",
+                    action="pick up cup",
+                    object="cup",
+                ),
+            ],
+            actors=[ObservedActor(name="worker")],
+            objects=[
+                ObservedObject(name="cup", object_type="cup"),
+                ObservedObject(name="cup", object_type="cup"),
+            ],
+            uncertainties=[],
+        )
+
+
+def test_video_segment_rejects_ambiguous_repeated_actor_reference() -> None:
+    with pytest.raises(ValueError, match="actor references are ambiguous"):
+        VideoSegment(
+            id="segment-1",
+            start_time_ms=0,
+            end_time_ms=1000,
+            scene="workbench",
+            actions=[
+                ObservedAction(
+                    id="action-1",
+                    start_time_ms=0,
+                    end_time_ms=1000,
+                    actor="worker",
+                    action="inspect",
+                ),
+            ],
+            actors=[
+                ObservedActor(name="worker"),
+                ObservedActor(name="worker"),
+            ],
+            objects=[],
+            uncertainties=[],
+        )
 
 
 def test_instruction_adds_action_references_to_actors_and_objects() -> None:
