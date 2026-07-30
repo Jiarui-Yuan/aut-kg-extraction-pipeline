@@ -123,6 +123,17 @@ class VideoSegment(Segment):
                 entity.name = f"{original_name}_{next_number[original_name]}"
 
 
+@dataclass(frozen=True)
+class InstructionReferenceIndex:
+    """Read-only instruction-wide identity and reverse-reference indexes."""
+
+    segments_by_id: Mapping[SegmentId, Segment]
+    actions_by_id: Mapping[ActionId, ObservedAction]
+    actors_by_id: Mapping[ActorId, ObservedActor]
+    objects_by_id: Mapping[ObjectId, ObservedObject]
+    actor_action_ids: Mapping[ActorId, tuple[ActionId, ...]]
+    object_action_ids: Mapping[ObjectId, tuple[ActionId, ...]]
+
 class Instruction:
     """A collection of segments with observations indexed by segment ID.
 
