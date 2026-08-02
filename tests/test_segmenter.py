@@ -137,3 +137,151 @@ def test_segmenter_rejects_missing_video_header() -> None:
         )
 
     assert fake_extractor.calls == []
+
+
+def test_segmenter_allows_missing_uncertainty() -> None:
+    fake_extractor = FakeExtractor(make_actions())
+    segmenter = Segmenter(extractor=fake_extractor)
+
+    text_without_uncertainty = sample_text().split(
+        "Uncertainty:",
+        maxsplit=1,
+    )[0]
+
+    instruction = segmenter.segment(text_without_uncertainty)
+    segment = instruction.segments[0]
+
+    assert segment.uncertainties == []
+    assert len(segment.actions) == 2
+    assert len(fake_extractor.calls) == 2
+
+
+def test_segmenter_keeps_two_actors_separate() -> None:
+    actions = make_actions()
+    actions[1].actor = "worker_2"
+
+    fake_extractor = FakeExtractor(actions)
+    segmenter = Segmenter(extractor=fake_extractor)
+
+    instruction = segmenter.segment(sample_text())
+    segment = instruction.segments[0]
+
+    assert len(segment.actors) == 2
+    assert segment.actors[0].name == "worker_1"
+    assert segment.actors[1].name == "worker_2"
+
+    assert segment.actors[0].action_ids == [
+        "seg_0003-action-1",
+    ]
+    assert segment.actors[1].action_ids == [
+        "seg_0003-action-2",
+    ]
+
+    assert segment.actions[0].actor_id == "seg_0003-actor-1"
+    assert segment.actions[1].actor_id == "seg_0003-actor-2"
+
+
+def test_segmenter_rejects_invalid_timestamp() -> None:
+    fake_extractor = FakeExtractor(make_actions())
+    segmenter = Segmenter(extractor=fake_extractor)
+
+    invalid_text = sample_text().replace(
+        "Time: 00:01:12.400 - 00:01:18.900",
+        "Time: 00:61:12.400 - 00:01:18.900",
+    )
+
+    with pytest.raises(ValueError, match="Invalid timestamp"):
+        segmenter.segment(invalid_text)
+
+
+def test_segmenter_handles_four_actions() -> None:
+    actions = make_actions()
+    actions.extend(
+        [
+            ExtractedAction(
+                start_time="00:01:19.000",
+                end_time="00:01:21.000",
+                actor="worker_1",
+                action="place",
+                object_name="screw",
+                target_name="metal panel",
+            ),
+            ExtractedAction(
+                start_time="00:01:21.200",
+                end_time="00:01:24.000",
+                actor="worker_1",
+                action="inspect",
+                object_name="metal panel",
+            ),
+        ]
+    )
+
+    extra_action_text = """
+3. [00:01:19.000 - 00:01:21.000]
+   worker_1 places the screw on the metal panel.
+
+4. [00:01:21.200 - 00:01:24.000]
+   worker_1 inspects the metal panel.
+"""
+
+    long_text = sample_text().replace(
+        "\nObjects:",
+        f"\n{extra_action_text}\nObjects:",
+    ).replace(
+        "Time: 00:01:12.400 - 00:01:18.900",
+        "Time: 00:01:12.400 - 00:01:24.000",
+    )
+
+    fake_extractor = FakeExtractor(actions)
+    segmenter = Segmenter(extractor=fake_extractor)
+
+    instruction = segmenter.segment(long_text)
+    segment = instruction.segments[0]
+
+    assert len(segment.actions) == 4
+    assert len(fake_extractor.calls) == 4
+    assert segment.actions[2].action == "place"
+    assert segment.actions[3].action == "inspect"
+    assert segment.actors[0].action_ids == [
+        "seg_0003-action-1",
+        "seg_0003-action-2",
+        "seg_0003-action-3",
+        "seg_0003-action-4",
+    ]
+
+
+def test_segmenter_corrects_inspection_object_role() -> None:
+    actions = make_actions()
+    actions[1] = ExtractedAction(
+        start_time="00:01:14.200",
+        end_time="00:01:18.900",
+        actor="worker_1",
+        action="inspect",
+        object_name=None,
+        instrument_name=None,
+        target_name="metal panel",
+    )
+
+    fake_extractor = FakeExtractor(actions)
+    segmenter = Segmenter(extractor=fake_extractor)
+
+    instruction = segmenter.segment(sample_text())
+    action = instruction.segments[0].actions[1]
+
+    assert action.object_id == "seg_0003-object-3"
+    assert action.target_id is None
+
+
+def test_segmenter_recovers_missing_target() -> None:
+    actions = make_actions()
+    actions[1].target_name = None
+
+    fake_extractor = FakeExtractor(actions)
+    segmenter = Segmenter(extractor=fake_extractor)
+
+    instruction = segmenter.segment(sample_text())
+    action = instruction.segments[0].actions[1]
+
+    assert action.object_id == "seg_0003-object-2"
+    assert action.instrument_id == "seg_0003-object-1"
+    assert action.target_id == "seg_0003-object-3"

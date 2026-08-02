@@ -72,6 +72,7 @@ class Segmenter:
             "Instruction name",
             required=False,
         )
+
         if instruction_name is None:
             instruction_name = video_id
 
@@ -146,6 +147,7 @@ class Segmenter:
 
         if match is not None:
             value = match.group(1).strip()
+
             if value:
                 return value
 
@@ -178,29 +180,129 @@ class Segmenter:
 
         return []
 
-    def _extract_actions(self, value: str) -> list[ExtractedAction]:
-        return [
-            self.extractor.extract(
+    def _extract_actions(
+        self,
+        value: str,
+    ) -> list[ExtractedAction]:
+        actions: list[ExtractedAction] = []
+
+        for block in self._split_actions(value):
+            extracted = self.extractor.extract(
                 text=block,
                 response_model=ExtractedAction,
                 system_prompt=self._action_prompt(),
             )
-            for block in self._split_actions(value)
-        ]
+
+            actions.append(
+                self._correct_action_roles(
+                    extracted,
+                    block,
+                )
+            )
+
+        return actions
+
+    @classmethod
+    def _correct_action_roles(
+        cls,
+        action: ExtractedAction,
+        source_text: str,
+    ) -> ExtractedAction:
+        action_name = action.action.casefold()
+
+        inspection_verbs = (
+            "inspect",
+            "check",
+            "examine",
+            "observe",
+        )
+
+        is_inspection = any(
+            verb in action_name
+            for verb in inspection_verbs
+        )
+
+        if (
+            is_inspection
+            and action.object_name is None
+            and action.target_name is not None
+        ):
+            return action.model_copy(
+                update={
+                    "object_name": action.target_name,
+                    "target_name": None,
+                }
+            )
+
+        target_verbs = (
+            "tighten",
+            "place",
+            "attach",
+            "mount",
+            "install",
+            "insert",
+            "move",
+        )
+
+        needs_target = any(
+            verb in action_name
+            for verb in target_verbs
+        )
+
+        if needs_target and action.target_name is None:
+            target_name = cls._target_from_text(
+                source_text
+            )
+
+            if target_name is not None:
+                return action.model_copy(
+                    update={
+                        "target_name": target_name,
+                    }
+                )
+
+        return action
 
     @staticmethod
-    def _parse_objects(value: str) -> list[ExtractedObject]:
+    def _target_from_text(
+        source_text: str,
+    ) -> str | None:
+        pattern = (
+            r"\b(?:on|onto|into|to)\s+"
+            r"(?:the\s+)?"
+            r"(?P<target>[^.\n]+?)"
+            r"(?=\s+using\b|[.\n]|$)"
+        )
+        match = re.search(
+            pattern,
+            source_text,
+            flags=re.IGNORECASE,
+        )
+
+        if match is None:
+            return None
+
+        return match.group("target").strip()
+
+    @staticmethod
+    def _parse_objects(
+        value: str,
+    ) -> list[ExtractedObject]:
         objects: list[ExtractedObject] = []
 
         for line in value.splitlines():
             item = line.strip().lstrip("-•").strip()
+
             if not item:
                 continue
 
             if ":" not in item:
-                raise ValueError(f"Invalid object entry: {line!r}")
+                raise ValueError(
+                    f"Invalid object entry: {line!r}"
+                )
 
             name, object_type = item.split(":", maxsplit=1)
+
             objects.append(
                 ExtractedObject(
                     name=name.strip(),
@@ -229,17 +331,24 @@ class Segmenter:
         match = re.fullmatch(pattern, value.strip())
 
         if match is None:
-            raise ValueError(f"Invalid timestamp: {value!r}")
+            raise ValueError(
+                f"Invalid timestamp: {value!r}"
+            )
 
         hours = int(match.group("hours") or 0)
         minutes = int(match.group("minutes"))
         seconds = int(match.group("seconds"))
         milliseconds = int(
-            (match.group("milliseconds") or "0").ljust(3, "0")
+            (match.group("milliseconds") or "0").ljust(
+                3,
+                "0",
+            )
         )
 
         if minutes >= 60 or seconds >= 60:
-            raise ValueError(f"Invalid timestamp: {value!r}")
+            raise ValueError(
+                f"Invalid timestamp: {value!r}"
+            )
 
         return (
             hours * 3_600_000
@@ -250,8 +359,15 @@ class Segmenter:
 
     @staticmethod
     def _name_key(value: str) -> str:
-        normalized = " ".join(value.casefold().split())
-        return re.sub(r"^(the|a|an)\s+", "", normalized)
+        normalized = " ".join(
+            value.casefold().split()
+        )
+
+        return re.sub(
+            r"^(the|a|an)\s+",
+            "",
+            normalized,
+        )
 
     def _build_video_segment(
         self,
@@ -262,7 +378,10 @@ class Segmenter:
         draft: SegmentDraft,
     ) -> VideoSegment:
         actor_names = list(
-            dict.fromkeys(action.actor for action in draft.actions)
+            dict.fromkeys(
+                action.actor
+                for action in draft.actions
+            )
         )
 
         actors = [
@@ -270,8 +389,12 @@ class Segmenter:
                 id=f"{segment_id}-actor-{index}",
                 name=name,
             )
-            for index, name in enumerate(actor_names, start=1)
+            for index, name in enumerate(
+                actor_names,
+                start=1,
+            )
         ]
+
         actor_ids = {
             self._name_key(actor.name): actor.id
             for actor in actors
@@ -283,8 +406,12 @@ class Segmenter:
                 name=item.name,
                 object_type=item.object_type,
             )
-            for index, item in enumerate(draft.objects, start=1)
+            for index, item in enumerate(
+                draft.objects,
+                start=1,
+            )
         ]
+
         object_ids = {
             self._name_key(item.name): item.id
             for item in objects
@@ -296,7 +423,9 @@ class Segmenter:
                 start_time_ms=self._timestamp_to_ms(
                     item.start_time
                 ),
-                end_time_ms=self._timestamp_to_ms(item.end_time),
+                end_time_ms=self._timestamp_to_ms(
+                    item.end_time
+                ),
                 actor_id=self._lookup(
                     actor_ids,
                     item.actor,
@@ -319,13 +448,20 @@ class Segmenter:
                     "target",
                 ),
             )
-            for index, item in enumerate(draft.actions, start=1)
+            for index, item in enumerate(
+                draft.actions,
+                start=1,
+            )
         ]
 
         return VideoSegment(
             id=segment_id,
-            start_time_ms=self._timestamp_to_ms(start_time),
-            end_time_ms=self._timestamp_to_ms(end_time),
+            start_time_ms=self._timestamp_to_ms(
+                start_time
+            ),
+            end_time_ms=self._timestamp_to_ms(
+                end_time
+            ),
             scene=draft.scene,
             actions=actions,
             actors=actors,
@@ -339,10 +475,14 @@ class Segmenter:
         name: str,
         kind: str,
     ) -> str:
-        identifier = values.get(self._name_key(name))
+        identifier = values.get(
+            self._name_key(name)
+        )
 
         if identifier is None:
-            raise ValueError(f"Unknown {kind}: {name!r}")
+            raise ValueError(
+                f"Unknown {kind}: {name!r}"
+            )
 
         return identifier
 
@@ -355,7 +495,11 @@ class Segmenter:
         if name is None:
             return None
 
-        return self._lookup(values, name, kind)
+        return self._lookup(
+            values,
+            name,
+            kind,
+        )
 
     @staticmethod
     def _action_prompt() -> str:
